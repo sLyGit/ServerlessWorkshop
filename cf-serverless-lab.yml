@@ -1,0 +1,331 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Base Infrastructure for Serverless Workshop - Image Processing Pipeline
+Parameters:
+  EmailRecipient:
+    Type: String
+    Default: aws+lab@exteam.fr
+    Description: Email recipient for processed images
+  ProjectTag:
+    Type: String
+    Default: lab
+    Description: Project tag value
+  LabTag:
+    Type: String
+    Default: serverless
+    Description: Lab tag value
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Resource Tags
+        Parameters:
+          - ProjectTag
+          - LabTag
+Transform: AWS::SecretsManager-2020-07-23
+Resources:
+  # S3 Bucket for image storage
+  ImageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub xtm-${AWS::StackName}-images
+
+  # DynamoDB Table for image metadata
+  ImageTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${AWS::StackName}-images
+      AttributeDefinitions:
+        - AttributeName: imageId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: imageId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # IAM Role for Lambda functions
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AssumeSendEmailRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: arn:aws:iam::752460275474:role/SendEmailRole
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub ${ImageBucket.Arn}/*
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:GetItem
+                Resource: !GetAtt ImageTable.Arn
+        - PolicyName: SESAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ses:SendEmail
+                Resource: '*'
+
+  # Step Functions Role
+  StepFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaInvoke
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: '*'
+
+  # Lambda Functions
+  RegisterImageFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      PackageType: Zip
+      Code:
+        ZipFile: |
+          import json
+          def handler(event, context):
+              print(json.dumps(event, indent=2))
+              return {
+                  'statusCode': 200,
+                  'body': 'Function executed successfully!'
+              }
+      Runtime: python3.13
+      Timeout: 30
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ImageTable
+          IMAGE_BUCKET: !Ref ImageBucket
+
+  WatermarkFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      PackageType: Zip
+      Code:
+        ZipFile: |
+          import json
+          def handler(event, context):
+              print(json.dumps(event, indent=2))
+              return {
+                  'statusCode': 200,
+                  'body': 'Function executed successfully!'
+              }
+      Runtime: python3.13
+      Timeout: 30
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ImageTable
+          IMAGE_BUCKET: !Ref ImageBucket
+
+  ThumbnailFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      PackageType: Zip
+      Code:
+        ZipFile: |
+          import json
+          def handler(event, context):
+              print(json.dumps(event, indent=2))
+              return {
+                  'statusCode': 200,
+                  'body': 'Function executed successfully!'
+              }
+      Runtime: python3.13
+      Timeout: 30
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ImageTable
+          IMAGE_BUCKET: !Ref ImageBucket
+
+  NotifyFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      PackageType: Zip
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+          from botocore.exceptions import ClientError
+
+          # Get environment variables
+          bucket_name = os.environ['IMAGE_BUCKET']
+          email_recipient = os.environ['EMAIL_RECIPIENT']
+
+          # Initialize S3  client
+          s3_client = boto3.client('s3')
+          # Initialize SES client
+          # Create an STS client
+          sts_client = boto3.client('sts')
+
+          # Assume the role
+          assumed_role = sts_client.assume_role(
+              RoleArn=target_role_arn,
+              RoleSessionName='LambdaCrossAccountSession'
+          )
+
+          # Get temporary credentials
+          credentials = assumed_role['Credentials']
+
+          # Create a new SES client using the assumed role credentials
+          ses_client = boto3.client(
+              'ses',
+              aws_access_key_id=credentials['AccessKeyId'],
+              aws_secret_access_key=credentials['SecretAccessKey'],
+              aws_session_token=credentials['SessionToken'],
+              region_name='eu-west-3'
+          )
+
+          def lambda_handler(event, context):
+
+              # Get object key from event or use default
+              object_key = event.get('object_key', 'default-image.jpg')
+
+              # Generate presigned URL
+              try:
+                  presigned_url = s3_client.generate_presigned_url(
+                      'get_object',
+                      Params={'Bucket': bucket_name, 'Key': object_key},
+                      ExpiresIn=3600  # URL expires in 1 hour
+                  )
+                  print(f"Presigned URL generated: {presigned_url}")
+              except ClientError as e:
+                  print(f"Error generating presigned URL: {e}")
+                  return {
+                      'statusCode': 500,
+                      'body': 'Error generating presigned URL'
+                  }
+
+              # Send email
+              try:
+                  sender_email = os.environ.get('SENDER_EMAIL', 'no-reply@example.com')
+
+                  ses_client.send_email(
+                      Source=sender_email,  # Must be verified in SES
+                      Destination={
+                          'ToAddresses': [email_recipient]
+                      },
+                      Message={
+                          'Subject': {
+                              'Data': 'Your S3 Object Access Link'
+                          },
+                          'Body': {
+                              'Text': {
+                                  'Data': f'Here is your secure link to access the requested file: {presigned_url}\n\nThis link will expire in 1 hour.'
+                              },
+                              'Html': {
+                                  'Data': f'''
+                                  <html>
+                                  <body>
+                                      <h2>Your Requested File</h2>
+                                      <p>Here is your secure link to access the requested file:</p>
+                                      <p><a href="{presigned_url}">Click here to view/download</a></p>
+                                      <p><i>This link will expire in 1 hour.</i></p>
+                                  </body>
+                                  </html>
+                                  '''
+                              }
+                          }
+                      }
+                  )
+                  print(f"Email sent successfully to {email_recipient}")
+              except ClientError as e:
+                  print(f"Error sending email: {e}")
+                  return {
+                      'statusCode': 500,
+                      'body': 'Error sending email'
+                  }
+
+              return {
+                  'statusCode': 200,
+                  'body': 'Presigned URL generated and sent successfully'
+              }
+
+      Runtime: python3.13
+      Timeout: 30
+      Environment:
+        Variables:
+          EMAIL_RECIPIENT: !Ref EmailRecipient
+          IMAGE_BUCKET: !Ref ImageBucket
+
+  # Step Function State Machine
+  ImageProcessingStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      RoleArn: !GetAtt StepFunctionRole.Arn
+      DefinitionString: !Sub |
+        {
+          "StartAt": "RegisterImage",
+          "States": {
+            "RegisterImage": {
+              "Type": "Task",
+              "Resource": "${RegisterImageFunction.Arn}",
+              "Next": "WatermarkImage"
+            },
+            "WatermarkImage": {
+              "Type": "Task",
+              "Resource": "${WatermarkFunction.Arn}",
+              "Next": "SendNotification"
+            },
+            "SendNotification": {
+              "Type": "Task",
+              "Resource": "${NotifyFunction.Arn}",
+              "End": true
+            }
+          }
+        }
+
+Outputs:
+  BucketName:
+    Description: Name of the S3 bucket for image upload
+    Value: !Ref ImageBucket
+
+  TableName:
+    Description: Name of the DynamoDB table
+    Value: !Ref ImageTable
+
+  StateMachineArn:
+    Description: ARN of the Step Function state machine
+    Value: !Ref ImageProcessingStateMachine
