@@ -422,13 +422,20 @@ Step function template:
   }
 }
 ```
-### Step 4: S3 Event (5 minutes)
+### Step 4: Trigger Step function from S3
+**Using Lambda**
+
+
+**Using Event Bridge**
+Follow AWS tutorial https://docs.aws.amazon.com/step-functions/latest/dg/tutorial-cloudwatch-events-s3.html
+__Bucket__: serverless-lab-sbx?-images
+__Step function__: ImageProcessingStateMachine-*
 
 ### Step 5: Testing (5 minutes)
 
 1. Upload test image:
 ```bash
-aws s3 cp test-image.jpg s3://your-bucket-name/
+aws s3 cp test-image.jpg s3://your-bucket-name/start
 ```
 
 2. Monitor Step Function execution:
