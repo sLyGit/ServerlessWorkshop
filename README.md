@@ -23,12 +23,11 @@ E -- get watermarked image --> A
 graph LR
 A[S3 Bucket]
 B[Step Function] --  1 Register Image--> G(DynamoDB)
-D -- upload watermarked image --> A
+D -- upload watermarked image --> A[S3 Bucket]
 B -- 2 --> D(Watermark Lambda) --> G
 B -- 2b. Update Image Status --> G(DynamoDB)
 B -- 4 --> F(Notification Lambda) --> H(Send Email)
 D -- get initial image --> A
-A[S3 Bucket]
 E(Thumbnail Lambda)
 ```
 ### Step 0: Connect to AWS Console  (5 minutes)
